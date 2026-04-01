@@ -4,128 +4,140 @@
  */
 
 import catsJson from './data/cats.json' with { type: 'json' };
+import quizzesJson from './data/quizzes.json' with { type: 'json' };
 
-// Configuration
+// Load coupons
+let coupons = [];
+try {
+  coupons = await Bun.file('./data/coupons.json').json();
+} catch { coupons = []; }
+
+// Config
 const PORT = parseInt(process.env.PORT || '3000', 10);
 const ZAI_API_KEY = process.env.ZAI_API_KEY;
 const ZAI_API_URL = process.env.ZAI_API_URL || 'https://api.z.ai/api/anthropic/v1/messages';
-const API_TIMEOUT = 15000; // 15 seconds
+const API_TIMEOUT = 15000;
 const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || 'torcello2024';
 
-// Rate limiting (in-memory for MVP)
+// Rate limiting
 const requestCounts = new Map();
-const RATE_LIMIT_WINDOW = 60000; // 1 minute
+const RATE_LIMIT_WINDOW = 60000;
 const MAX_REQUESTS_PER_MINUTE = 20;
 
-/**
- * Simple rate limiter
- */
 function isRateLimited(clientId) {
   const now = Date.now();
   const clientData = requestCounts.get(clientId);
-
   if (!clientData || now - clientData.resetTime > RATE_LIMIT_WINDOW) {
     requestCounts.set(clientId, { count: 1, resetTime: now });
     return false;
   }
-
-  if (clientData.count >= MAX_REQUESTS_PER_MINUTE) {
-    return true;
-  }
-
+  if (clientData.count >= MAX_REQUESTS_PER_MINUTE) return true;
   clientData.count++;
   return false;
 }
 
-/**
- * CORS headers
- */
+// Helpers
 function corsHeaders() {
-  return {
-    'Access-Control-Allow-Origin': '*',
-    'Access-Control-Allow-Methods': 'GET, POST, PUT, DELETE, OPTIONS',
-    'Access-Control-Allow-Headers': 'Content-Type, Authorization',
-  };
+  return { 'Access-Control-Allow-Origin': '*', 'Access-Control-Allow-Methods': 'GET,POST,PUT,DELETE,OPTIONS', 'Access-Control-Allow-Headers': 'Content-Type,Authorization' };
 }
 
-/**
- * Handle OPTIONS
- */
-function handleOptions() {
-  return new Response(null, { status: 204, headers: corsHeaders() });
+function jsonResponse(data, status = 200) {
+  return new Response(JSON.stringify(data), { status, headers: { ...corsHeaders(), 'Content-Type': 'application/json' } });
 }
 
-/**
- * Get all cats (public)
- */
+function checkAdmin(request) {
+  if (request.headers.get('authorization') !== `Bearer ${ADMIN_PASSWORD}`) {
+    return jsonResponse({ error: '인증이 필요합니다' }, 401);
+  }
+  return null;
+}
+
+function generateCouponCode() {
+  const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
+  const seg = () => Array.from({ length: 4 }, () => chars[Math.floor(Math.random() * chars.length)]).join('');
+  return `TC-${seg()}-${seg()}`;
+}
+
+async function saveQuizzes() {
+  await Bun.write('./data/quizzes.json', JSON.stringify(quizzesJson, null, 2));
+}
+
+async function saveCoupons() {
+  await Bun.write('./data/coupons.json', JSON.stringify(coupons, null, 2));
+}
+
+async function saveCatsData() {
+  await Bun.write('./data/cats.json', JSON.stringify(catsJson, null, 2));
+}
+
+// --- PUBLIC APIs ---
+
 function handleGetAllCats() {
-  const publicCats = catsJson.cats.map(({ id, name, emoji, color, greeting }) => ({
-    id, name, emoji, color, greeting,
-  }));
-  return Response.json(publicCats);
+  return catsJson.cats.map(({ id, name, emoji, color, greeting }) => ({ id, name, emoji, color, greeting }));
 }
 
-/**
- * Get single cat (public)
- */
-function handleGetSingleCat(pathname) {
-  const catId = pathname.slice('/api/cats/'.length);
+function handleGetSingleCat(catId) {
   const cat = catsJson.cats.find(c => c.id === catId);
-  if (!cat) {
-    return Response.json({ error: '고양이를 찾을 수 없습니다' }, { status: 404 });
-  }
-  const { id, name, emoji, color, greeting } = cat;
-  return Response.json({ id, name, emoji, color, greeting });
+  if (!cat) return null;
+  const { id, name, emoji, color, greeting, quizzes } = cat;
+  return { id, name, emoji, color, greeting, quizzes };
 }
 
-/**
- * Handle chat request
- */
-async function handleChat(request, catId) {
-  if (!ZAI_API_KEY) {
-    return Response.json(
-      { error: '서버 설정 오류: API 키가 없습니다' },
-      { status: 500 }
-    );
+function handleGetQuiz() {
+  const active = quizzesJson.filter(q => q.active);
+  if (active.length === 0) return null;
+  const quiz = active[Math.floor(Math.random() * active.length)];
+  return { id: quiz.id, question: quiz.question, hint: quiz.hint };
+}
+
+function handleQuizAnswer(body) {
+  const { quizId, answer } = body;
+  const quiz = quizzesJson.find(q => q.id === quizId);
+  if (!quiz) return { error: '퀴즈를 찾을 수 없습니다' };
+
+  // Normalize: lowercase, trim, remove spaces
+  const normalize = s => String(s).toLowerCase().trim().replace(/\s+/g, '');
+  const correct = normalize(answer).includes(normalize(quiz.answer)) ||
+                  normalize(quiz.answer).includes(normalize(answer));
+
+  if (correct) {
+    const code = generateCouponCode();
+    coupons.push({
+      code,
+      quizId: quiz.id,
+      question: quiz.question,
+      used: false,
+      createdAt: new Date().toISOString(),
+    });
+    saveCoupons();
+    console.log(`Coupon issued: ${code} for quiz ${quiz.id}`);
+    return { correct: true, code, answer: quiz.answer };
   }
+
+  return { correct: false, answer: quiz.answer };
+}
+
+// --- CHAT ---
+
+async function handleChat(request, catId) {
+  if (!ZAI_API_KEY) return jsonResponse({ error: '서버 설정 오류' }, 500);
 
   let body;
-  try {
-    body = await request.json();
-  } catch {
-    return Response.json({ error: '잘못된 요청 형식입니다' }, { status: 400 });
-  }
+  try { body = await request.json(); } catch { return jsonResponse({ error: '잘못된 요청' }, 400); }
 
   const { message, history } = body;
-  if (!message || typeof message !== 'string') {
-    return Response.json({ error: '메시지가 필요합니다' }, { status: 400 });
-  }
+  if (!message || typeof message !== 'string') return jsonResponse({ error: '메시지가 필요합니다' }, 400);
 
-  // Find cat
-  const cat = catId
-    ? catsJson.cats.find(c => c.id === catId)
-    : catsJson.cats[0];
-  if (!cat) {
-    return Response.json({ error: '고양이를 찾을 수 없습니다' }, { status: 404 });
-  }
+  const cat = catId ? catsJson.cats.find(c => c.id === catId) : catsJson.cats[0];
+  if (!cat) return jsonResponse({ error: '고양이를 찾을 수 없습니다' }, 404);
 
-  // Rate limiting
   const clientId = request.headers.get('x-forwarded-for') || 'unknown';
-  if (isRateLimited(clientId)) {
-    return Response.json(
-      { error: '너무 많은 요청입니다. 잠시 후 다시 시도해주세요.' },
-      { status: 429 }
-    );
-  }
+  if (isRateLimited(clientId)) return jsonResponse({ error: '너무 많은 요청입니다' }, 429);
 
-  // Build messages with history
-  const messagesWithContext = (history || []).map(h => ({
-    role: h.role,
-    content: h.content,
-  }));
-  messagesWithContext.push({ role: 'user', content: message });
+  // Build messages
+  const messages = (history || []).map(h => ({ role: h.role, content: h.content }));
+  messages.push({ role: 'user', content: message });
 
-  // Call API with timeout
   const controller = new AbortController();
   const timeoutId = setTimeout(() => controller.abort(), API_TIMEOUT);
 
@@ -141,230 +153,195 @@ async function handleChat(request, catId) {
         model: 'claude-haiku-4-20250514',
         max_tokens: 1024,
         system: cat.systemPrompt,
-        messages: messagesWithContext,
+        messages,
       }),
       signal: controller.signal,
     });
 
     clearTimeout(timeoutId);
-
     if (!response.ok) {
-      const errorText = await response.text();
-      console.error('API error:', errorText);
+      console.error('API error:', await response.text());
       throw new Error(`API error: ${response.status}`);
     }
 
     const data = await response.json();
     const reply = data.content?.[0]?.text || '';
-
-    return Response.json({ reply });
+    return jsonResponse({ reply });
 
   } catch (error) {
     clearTimeout(timeoutId);
-
-    if (error.name === 'AbortError') {
-      return Response.json(
-        { error: '고양이가 잠시 멈췄어요. 다시 시도해주세요!' },
-        { status: 504 }
-      );
-    }
-
+    if (error.name === 'AbortError') return jsonResponse({ error: '고양이가 잠시 멈췄어요!' }, 504);
     console.error('Chat error:', error);
-    return Response.json(
-      { error: '죄송해요. 다시 시도해주세요.' },
-      { status: 500 }
-    );
+    return jsonResponse({ error: '다시 시도해주세요.' }, 500);
   }
 }
 
-/**
- * Serve static files
- */
+// --- ADMIN APIs ---
+
+async function handleAdminUpdateCat(request, catId) {
+  const body = await request.json();
+  const catIndex = catsJson.cats.findIndex(c => c.id === catId);
+  if (catIndex === -1) return jsonResponse({ error: '고양이를 찾을 수 없습니다' }, 404);
+
+  ['name', 'emoji', 'color', 'systemPrompt', 'greeting'].forEach(k => {
+    if (body[k]) catsJson.cats[catIndex][k] = body[k];
+  });
+  await saveCatsData();
+  return { success: true, cat: catsJson.cats[catIndex] };
+}
+
+async function handleAdminAddCat(request) {
+  const body = await request.json();
+  if (!body.name || !body.systemPrompt) return jsonResponse({ error: '이름과 프롬프트 필수' }, 400);
+
+  const newCat = {
+    id: `${body.name.toLowerCase().replace(/[^a-z0-9]/g, '')}-${String(catsJson.cats.length + 1).padStart(2, '0')}`,
+    name: body.name,
+    emoji: body.emoji || '🐱',
+    color: body.color || '#FFB6C1',
+    systemPrompt: body.systemPrompt,
+    greeting: body.greeting || `안냥! 나는 ${body.name}이당! 😺`,
+  };
+  catsJson.cats.push(newCat);
+  await saveCatsData();
+  return { success: true, cat: newCat };
+}
+
+async function handleAdminDeleteCat(catId) {
+  const i = catsJson.cats.findIndex(c => c.id === catId);
+  if (i === -1) return jsonResponse({ error: '고양이를 찾을 수 없습니다' }, 404);
+  if (catsJson.cats.length <= 1) return jsonResponse({ error: '최소 1마리 필요' }, 400);
+  catsJson.cats.splice(i, 1);
+  await saveCatsData();
+  return { success: true };
+}
+
+async function handleAdminAddQuiz(request) {
+  const body = await request.json();
+  if (!body.question || !body.answer) return jsonResponse({ error: '질문과 정답 필수' }, 400);
+
+  const quiz = {
+    id: `q${Date.now()}`,
+    question: body.question,
+    answer: body.answer,
+    hint: body.hint || '',
+    active: true,
+  };
+  quizzesJson.push(quiz);
+  await saveQuizzes();
+  return { success: true, quiz };
+}
+
+async function handleAdminUpdateQuiz(request, quizId) {
+  const body = await request.json();
+  const i = quizzesJson.findIndex(q => q.id === quizId);
+  if (i === -1) return jsonResponse({ error: '퀴즈를 찾을 수 없습니다' }, 404);
+
+  ['question', 'answer', 'hint'].forEach(k => {
+    if (body[k] !== undefined) quizzesJson[i][k] = body[k];
+  });
+  if (body.active !== undefined) quizzesJson[i].active = body.active;
+  await saveQuizzes();
+  return { success: true, quiz: quizzesJson[i] };
+}
+
+async function handleAdminDeleteQuiz(quizId) {
+  const i = quizzesJson.findIndex(q => q.id === quizId);
+  if (i === -1) return jsonResponse({ error: '퀴즈를 찾을 수 없습니다' }, 404);
+  quizzesJson.splice(i, 1);
+  await saveQuizzes();
+  return { success: true };
+}
+
+// --- STATIC FILES ---
+
 async function serveStatic(pathname) {
   let filePath = pathname === '/' ? './public/index.html' : `./public${pathname}`;
-
-  if (filePath.endsWith('/')) {
-    filePath += 'index.html';
-  }
-
+  if (filePath.endsWith('/')) filePath += 'index.html';
   try {
     const file = Bun.file(filePath);
-    if (await file.exists()) {
-      return new Response(file);
-    }
-    return new Response('Not found', { status: 404 });
-  } catch {
-    return new Response('Not found', { status: 404 });
-  }
+    if (await file.exists()) return new Response(file);
+  } catch {}
+  return new Response('Not found', { status: 404 });
 }
 
-/**
- * Write cats data to disk
- */
-async function saveCatsData() {
-  await Bun.write('./data/cats.json', JSON.stringify(catsJson, null, 2));
-}
+// --- SERVER ---
 
-/**
- * Check admin auth
- */
-function checkAdmin(request) {
-  const auth = request.headers.get('authorization');
-  if (auth !== `Bearer ${ADMIN_PASSWORD}`) {
-    return Response.json({ error: '인증이 필요합니다' }, { status: 401 });
-  }
-  return null;
-}
-
-/**
- * Admin: update cat
- */
-async function handleAdminUpdate(request, pathname) {
-  const authError = checkAdmin(request);
-  if (authError) return authError;
-
-  const catId = pathname.slice('/api/admin/cats/'.length);
-  const catIndex = catsJson.cats.findIndex(c => c.id === catId);
-  if (catIndex === -1) {
-    return Response.json({ error: '고양이를 찾을 수 없습니다' }, { status: 404 });
-  }
-
-  try {
-    const body = await request.json();
-    if (body.name) catsJson.cats[catIndex].name = body.name;
-    if (body.emoji) catsJson.cats[catIndex].emoji = body.emoji;
-    if (body.color) catsJson.cats[catIndex].color = body.color;
-    if (body.greeting) catsJson.cats[catIndex].greeting = body.greeting;
-    if (body.systemPrompt) catsJson.cats[catIndex].systemPrompt = body.systemPrompt;
-
-    await saveCatsData();
-    console.log(`Updated cat: ${catId}`);
-    return Response.json({ success: true, cat: catsJson.cats[catIndex] });
-  } catch (e) {
-    console.error('Admin update error:', e);
-    return Response.json({ error: '업데이트 실패' }, { status: 500 });
-  }
-}
-
-/**
- * Admin: add new cat
- */
-async function handleAdminAdd(request) {
-  const authError = checkAdmin(request);
-  if (authError) return authError;
-
-  try {
-    const body = await request.json();
-    const { name, emoji, color, systemPrompt, greeting } = body;
-
-    if (!name || !systemPrompt) {
-      return Response.json({ error: '이름과 프롬프트는 필수입니다' }, { status: 400 });
-    }
-
-    const newCat = {
-      id: `${name.toLowerCase().replace(/[^a-z0-9]/g, '')}-${String(catsJson.cats.length + 1).padStart(2, '0')}`,
-      name,
-      emoji: emoji || '🐱',
-      color: color || '#FFB6C1',
-      systemPrompt,
-      greeting: greeting || `안냥! 나는 ${name}이당! 😺`,
-    };
-
-    catsJson.cats.push(newCat);
-    await saveCatsData();
-    console.log(`Added cat: ${newCat.id}`);
-    return Response.json({ success: true, cat: newCat });
-  } catch (e) {
-    console.error('Admin add error:', e);
-    return Response.json({ error: '추가 실패' }, { status: 500 });
-  }
-}
-
-/**
- * Admin: delete cat
- */
-async function handleAdminDelete(pathname) {
-  const catId = pathname.slice('/api/admin/cats/'.length);
-  const catIndex = catsJson.cats.findIndex(c => c.id === catId);
-  if (catIndex === -1) {
-    return Response.json({ error: '고양이를 찾을 수 없습니다' }, { status: 404 });
-  }
-  if (catsJson.cats.length <= 1) {
-    return Response.json({ error: '최소 1마리의 고양이가 필요합니다' }, { status: 400 });
-  }
-
-  catsJson.cats.splice(catIndex, 1);
-  await saveCatsData();
-  console.log(`Deleted cat: ${catId}`);
-  return Response.json({ success: true });
-}
-
-/**
- * Bun server
- */
 Bun.serve({
   port: PORT,
   async fetch(request) {
-    const url = new URL(request.url);
-    const pathname = url.pathname;
+    const { pathname } = new URL(request.url);
 
-    // CORS
     if (request.method === 'OPTIONS') {
-      return handleOptions();
+      return new Response(null, { status: 204, headers: corsHeaders() });
     }
 
-    // Health check
-    if (pathname === '/api/health') {
-      return Response.json({ status: 'ok' });
-    }
+    // Health
+    if (pathname === '/api/health') return jsonResponse({ status: 'ok' });
 
-    // Public: all cats
-    if (pathname === '/api/cats') {
-      const r = handleGetAllCats();
-      return new Response(r.body, { status: r.status, headers: { ...corsHeaders(), 'Content-Type': 'application/json' } });
+    // --- PUBLIC ---
+    if (pathname === '/api/cats' && request.method === 'GET') return jsonResponse(handleGetAllCats());
+    if (pathname.match(/^\/api\/cats\/[\w-]+$/) && request.method === 'GET') {
+      const cat = handleGetSingleCat(pathname.slice('/api/cats/'.length));
+      return cat ? jsonResponse(cat) : jsonResponse({ error: 'not found' }, 404);
     }
-
-    // Public: single cat
-    if (pathname.startsWith('/api/cats/') && pathname.length > '/api/cats/'.length) {
-      const r = handleGetSingleCat(pathname);
-      return new Response(r.body, { status: r.status, headers: { ...corsHeaders(), 'Content-Type': 'application/json' } });
-    }
-
-    // Public: chat (default cat)
-    if (pathname === '/api/chat' && request.method === 'POST') {
-      const r = await handleChat(request, null);
-      return new Response(r.body, { status: r.status, headers: { ...corsHeaders(), 'Content-Type': 'application/json' } });
-    }
-
-    // Public: chat (specific cat)
+    if (pathname === '/api/chat' && request.method === 'POST') return await handleChat(request, null);
     if (pathname.match(/^\/api\/chat\/[\w-]+$/) && request.method === 'POST') {
-      const catId = pathname.slice('/api/chat/'.length);
-      const r = await handleChat(request, catId);
-      return new Response(r.body, { status: r.status, headers: { ...corsHeaders(), 'Content-Type': 'application/json' } });
+      return await handleChat(request, pathname.slice('/api/chat/'.length));
     }
 
-    // Admin: update cat
+    // Quiz public
+    if (pathname === '/api/quiz' && request.method === 'GET') {
+      const quiz = handleGetQuiz();
+      return quiz ? jsonResponse(quiz) : jsonResponse({ error: '퀴즈가 없습니다' }, 404);
+    }
+    if (pathname === '/api/quiz/answer' && request.method === 'POST') {
+      const body = await request.json();
+      return jsonResponse(handleQuizAnswer(body));
+    }
+
+    // --- ADMIN (password required) ---
+    const adminErr = checkAdmin(request);
+    const isAdminPath = pathname.startsWith('/api/admin');
+    if (isAdminPath && adminErr) return adminErr;
+
+    // Cats admin
+    if (pathname === '/api/admin/cats' && request.method === 'POST') return jsonResponse(await handleAdminAddCat(request));
     if (pathname.match(/^\/api\/admin\/cats\/[\w-]+$/) && request.method === 'PUT') {
-      const r = await handleAdminUpdate(request, pathname);
-      return new Response(r.body, { status: r.status, headers: { ...corsHeaders(), 'Content-Type': 'application/json' } });
+      return jsonResponse(await handleAdminUpdateCat(request, pathname.slice('/api/admin/cats/'.length)));
     }
-
-    // Admin: add cat
-    if (pathname === '/api/admin/cats' && request.method === 'POST') {
-      const r = await handleAdminAdd(request);
-      return new Response(r.body, { status: r.status, headers: { ...corsHeaders(), 'Content-Type': 'application/json' } });
-    }
-
-    // Admin: delete cat
     if (pathname.match(/^\/api\/admin\/cats\/[\w-]+$/) && request.method === 'DELETE') {
-      const r = await handleAdminDelete(pathname);
-      return new Response(r.body, { status: r.status, headers: { ...corsHeaders(), 'Content-Type': 'application/json' } });
+      return jsonResponse(await handleAdminDeleteCat(pathname.slice('/api/admin/cats/'.length)));
     }
 
-    // Static files
+    // Quizzes admin
+    if (pathname === '/api/admin/quizzes' && request.method === 'GET') return jsonResponse(quizzesJson);
+    if (pathname === '/api/admin/quizzes' && request.method === 'POST') return jsonResponse(await handleAdminAddQuiz(request));
+    if (pathname.match(/^\/api\/admin\/quizzes\/[\w-]+$/) && request.method === 'PUT') {
+      return jsonResponse(await handleAdminUpdateQuiz(request, pathname.slice('/api/admin/quizzes/'.length)));
+    }
+    if (pathname.match(/^\/api\/admin\/quizzes\/[\w-]+$/) && request.method === 'DELETE') {
+      return jsonResponse(await handleAdminDeleteQuiz(pathname.slice('/api/admin/quizzes/'.length)));
+    }
+
+    // Coupons admin
+    if (pathname === '/api/admin/coupons' && request.method === 'GET') return jsonResponse(coupons);
+    if (pathname === '/api/admin/coupons/redeem' && request.method === 'POST') {
+      const { code } = await request.json();
+      const coupon = coupons.find(c => c.code === code);
+      if (!coupon) return jsonResponse({ error: '쿠폰을 찾을 수 없습니다' }, 404);
+      if (coupon.used) return jsonResponse({ error: '이미 사용된 쿠폰' }, 400);
+      coupon.used = true;
+      coupon.usedAt = new Date().toISOString();
+      await saveCoupons();
+      return jsonResponse({ success: true, coupon });
+    }
+
+    // Static
     return serveStatic(pathname);
   },
 });
 
 console.log(`🐱 Cat Chat server running on http://localhost:${PORT}`);
 console.log(`   Cats: ${catsJson.cats.map(c => `${c.emoji} ${c.name}`).join(', ')}`);
+console.log(`   Quizzes: ${quizzesJson.filter(q => q.active).length} active`);

@@ -138,6 +138,13 @@
     <h2>고양이 목록</h2>
     <div id="catCards"></div>
     <button class="add-btn" onclick="showAddForm()">+ 새 고양이 추가</button>
+
+    <h2 style="margin-top:30px">📝 퀴즈 관리 <button class="btn btn-primary" onclick="showAddQuizForm()" style="float:right">+ 퀴즈 추가</button></h2>
+    <div id="quizList"></div>
+
+    <h2 style="margin-top:30px">🎁 쿠폰 관리</h2>
+    <div id="couponStats" style="font-size:13px;color:#666;margin-bottom:8px"></div>
+    <div id="couponList"></div>
   </div>
 
   <script>
@@ -164,7 +171,7 @@
     function showAdmin() {
       document.getElementById('loginBox').style.display = 'none';
       document.getElementById('adminPanel').classList.add('show');
-      loadCats();
+      loadAdminData();
     }
 
     function authHeaders() {
@@ -340,6 +347,162 @@
       const el = document.getElementById(`msg-${catId}`);
       el.innerHTML = `<div class="msg ${ok ? 'msg-ok' : 'msg-err'}">${text}</div>`;
       setTimeout(() => el.innerHTML = '', 2000);
+    }
+
+    // --- QUIZ MANAGEMENT ---
+    async function loadQuizzes() {
+      try {
+        const res = await fetch(`${API}/api/admin/quizzes`, { headers: authHeaders() });
+        const quizzes = await res.json();
+        renderQuizzes(quizzes);
+      } catch { document.getElementById('quizList').innerHTML = '<div class="msg msg-err">퀴즈 로딩 실패</div>'; }
+    }
+
+    function renderQuizzes(quizzes) {
+      document.getElementById('quizList').innerHTML = quizzes.map(q => `
+        <div class="cat-card" id="quiz-${q.id}">
+          <div class="cat-card-header">
+            <span class="name">${q.active ? '🟢' : '🔴'} ${q.question}</span>
+            <div class="actions">
+              <button class="btn btn-primary" onclick="toggleQuizEdit('${q.id}')">수정</button>
+              <button class="btn btn-danger" onclick="deleteQuiz('${q.id}')">삭제</button>
+            </div>
+          </div>
+          <div class="edit-form" id="qedit-${q.id}">
+            <div class="field"><label>질문</label><input id="qq-${q.id}" value="${q.question}" /></div>
+            <div class="field"><label>정답</label><input id="qa-${q.id}" value="${q.answer}" /></div>
+            <div class="field"><label>힌트</label><input id="qh-${q.id}" value="${q.hint || ''}" /></div>
+            <div class="field">
+              <label><input type="checkbox" id="qact-${q.id}" ${q.active ? 'checked' : ''} /> 활성화</label>
+            </div>
+            <button class="btn btn-success" onclick="saveQuiz('${q.id}')">저장</button>
+            <div id="qmsg-${q.id}"></div>
+          </div>
+        </div>
+      `).join('');
+    }
+
+    function toggleQuizEdit(id) {
+      document.getElementById(`qedit-${id}`).classList.toggle('show');
+    }
+
+    async function saveQuiz(id) {
+      const data = {
+        question: document.getElementById(`qq-${id}`).value,
+        answer: document.getElementById(`qa-${id}`).value,
+        hint: document.getElementById(`qh-${id}`).value,
+        active: document.getElementById(`qact-${id}`).checked,
+      };
+      try {
+        const res = await fetch(`${API}/api/admin/quizzes/${id}`, {
+          method: 'PUT', headers: authHeaders(), body: JSON.stringify(data),
+        });
+        const r = await res.json();
+        if (res.ok) { loadQuizzes(); } else { alert(r.error); }
+      } catch { alert('저장 실패'); }
+    }
+
+    async function deleteQuiz(id) {
+      if (!confirm('이 퀴즈를 삭제할까요?')) return;
+      try {
+        await fetch(`${API}/api/admin/quizzes/${id}`, {
+          method: 'DELETE', headers: authHeaders(),
+        });
+        loadQuizzes();
+      } catch { alert('삭제 실패'); }
+    }
+
+    function showAddQuizForm() {
+      const html = `
+        <div class="cat-card" id="add-quiz-form">
+          <div class="cat-card-header">
+            <span class="name">❓ 새 퀴즈</span>
+            <button class="btn btn-secondary" onclick="document.getElementById('add-quiz-form').remove()">취소</button>
+          </div>
+          <div class="field"><label>질문</label><input id="nq-question" /></div>
+          <div class="field"><label>정답</label><input id="nq-answer" /></div>
+          <div class="field"><label>힌트</label><input id="nq-hint" /></div>
+          <button class="btn btn-success" onclick="addQuiz()">추가</button>
+          <div id="nq-msg"></div>
+        </div>
+      `;
+      document.getElementById('quizList').insertAdjacentHTML('beforeend', html);
+    }
+
+    async function addQuiz() {
+      const data = {
+        question: document.getElementById('nq-question').value,
+        answer: document.getElementById('nq-answer').value,
+        hint: document.getElementById('nq-hint').value,
+      };
+      if (!data.question || !data.answer) {
+        document.getElementById('nq-msg').innerHTML = '<div class="msg msg-err">질문과 정답은 필수</div>';
+        return;
+      }
+      try {
+        const res = await fetch(`${API}/api/admin/quizzes`, {
+          method: 'POST', headers: authHeaders(), body: JSON.stringify(data),
+        });
+        if (res.ok) { loadQuizzes(); } else {
+          const r = await res.json();
+          document.getElementById('nq-msg').innerHTML = `<div class="msg msg-err">${r.error}</div>`;
+        }
+      } catch { document.getElementById('nq-msg').innerHTML = '<div class="msg msg-err">추가 실패</div>'; }
+    }
+
+    // --- COUPON MANAGEMENT ---
+    async function loadCoupons() {
+      try {
+        const res = await fetch(`${API}/api/admin/coupons`, { headers: authHeaders() });
+        const coupons = await res.json();
+        renderCoupons(coupons);
+      } catch { document.getElementById('couponList').innerHTML = '<div class="msg msg-err">쿠폰 로딩 실패</div>'; }
+    }
+
+    function renderCoupons(coupons) {
+      if (coupons.length === 0) {
+        document.getElementById('couponList').innerHTML = '<div style="color:#666;padding:16px">아직 발급된 쿠폰이 없습니다</div>';
+        document.getElementById('couponStats').textContent = '';
+        return;
+      }
+      const active = coupons.filter(c => !c.used).length;
+      const used = coupons.filter(c => c.used).length;
+      document.getElementById('couponStats').textContent = `활성: ${active} | 사용됨: ${used} | 전체: ${coupons.length}`;
+
+      document.getElementById('couponList').innerHTML = `
+        <table style="width:100%;font-size:13px;border-collapse:collapse">
+          <tr style="background:#f5f5f5"><th style="padding:8px;text-align:left">코드</th><th style="padding:8px">퀴즈</th><th style="padding:8px">상태</th><th style="padding:8px">일시</th><th style="padding:8px">사용</th></tr>
+          ${coupons.slice().reverse().map(c => `
+            <tr style="border-bottom:1px solid #eee">
+              <td style="padding:8px;font-family:monospace;font-weight:600">${c.code}</td>
+              <td style="padding:8px;max-width:150px;overflow:hidden;text-overflow:ellipsis">${c.question || '-'}</td>
+              <td style="padding:8px">${c.used ? '✅ 사용됨' : '🎫 활성'}</td>
+              <td style="padding:8px;font-size:11px">${new Date(c.createdAt).toLocaleString('ko-KR')}</td>
+              <td style="padding:8px">${!c.used ? `<button class="btn btn-success" onclick="redeemCoupon('${c.code}')">사용처리</button>` : ''}</td>
+            </tr>
+          `).join('')}
+        </table>
+      `;
+    }
+
+    async function redeemCoupon(code) {
+      if (!confirm(`쿠폰 ${code}을(를) 사용 처리할까요?`)) return;
+      try {
+        const res = await fetch(`${API}/api/admin/coupons/redeem`, {
+          method: 'POST', headers: authHeaders(), body: JSON.stringify({ code }),
+        });
+        if (res.ok) { loadCoupons(); } else {
+          const r = await res.json();
+          alert(r.error);
+        }
+      } catch { alert('처리 실패'); }
+    }
+
+    // Load all admin data on login
+    function loadAdminData() {
+      loadCats();
+      loadQuizzes();
+      loadCoupons();
     }
   </script>
 </body>

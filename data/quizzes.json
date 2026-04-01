@@ -1,0 +1,37 @@
+[
+  {
+    "id": "q1",
+    "question": "고양이가 하루에 평균 몇 시간을 자나냥?",
+    "answer": "12",
+    "hint": "생각보다 많이 잔다냥~ 😴",
+    "active": true
+  },
+  {
+    "id": "q2",
+    "question": "고양이가 꼬리를 세우고 다가오면 무슨 뜻이냥?",
+    "answer": "반갑",
+    "hint": "기분이 좋을 때 그렇게 한다냥! 😸",
+    "active": true
+  },
+  {
+    "id": "q3",
+    "question": "고양이의 수염은 몇 개 정도 있냥?",
+    "answer": "24",
+    "hint": "양쪽을 합쳐서 세어보냥~ 🐱",
+    "active": true
+  },
+  {
+    "id": "q4",
+    "question": "고양이는 어떤 맛을 못 느끼냥?",
+    "answer": "단맛",
+    "hint": "사람과 다른 점이냥! 🍰",
+    "active": true
+  },
+  {
+    "id": "q5",
+    "question": "카페 토르첼로는 어느 도시에 있냥?",
+    "answer": "울산",
+    "hint": "바다 근처 도시다냥~ 🌊",
+    "active": true
+  }
+]

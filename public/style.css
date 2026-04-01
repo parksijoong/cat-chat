@@ -268,3 +268,33 @@ main {
 .toast.show {
   opacity: 1;
 }
+
+/* Coupon card */
+.coupon-card {
+  margin-top: 8px;
+  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+  color: #fff;
+  border-radius: 12px;
+  padding: 12px 16px;
+  text-align: center;
+}
+
+.coupon-label {
+  font-size: 12px;
+  opacity: 0.9;
+  margin-bottom: 4px;
+}
+
+.coupon-code {
+  font-size: 20px;
+  font-weight: 700;
+  font-family: 'Courier New', monospace;
+  letter-spacing: 2px;
+  padding: 4px 0;
+}
+
+.coupon-hint {
+  font-size: 11px;
+  opacity: 0.7;
+  margin-top: 4px;
+}

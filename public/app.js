@@ -18,6 +18,7 @@ const clearBtn = document.getElementById('clearBtn');
 let isLoading = false;
 let currentCatId = null;
 let allCats = [];
+let activeQuiz = null; // { id, question, hint }
 
 // localStorage keys
 const STORAGE_KEY = 'catchat_';
@@ -48,6 +49,34 @@ function clearHistory(catId) {
   localStorage.removeItem(getStorageKey(catId));
 }
 
+// Coupons
+const COUPON_KEY = 'catchat_coupons';
+
+function getSavedCoupons() {
+  try {
+    return JSON.parse(localStorage.getItem(COUPON_KEY) || '[]');
+  } catch { return []; }
+}
+
+function saveCoupon(code) {
+  const coupons = getSavedCoupons();
+  if (!coupons.find(c => c.code === code)) {
+    coupons.push({ code, savedAt: new Date().toISOString() });
+    localStorage.setItem(COUPON_KEY, JSON.stringify(coupons));
+  }
+}
+
+// Detect coupon code in response (pattern: TC-XXXX-XXXX)
+const COUPON_REGEX = /TC-[A-Z0-9]{4}-[A-Z0-9]{4}/g;
+
+function extractAndSaveCoupons(text) {
+  const matches = text.match(COUPON_REGEX);
+  if (matches) {
+    matches.forEach(code => saveCoupon(code));
+  }
+  return matches || [];
+}
+
 /**
  * Show toast
  */
@@ -66,7 +95,23 @@ function addMessage(text, type, save = true) {
 
   const bubble = document.createElement('div');
   bubble.className = 'message-bubble';
-  bubble.textContent = text;
+
+  // Detect coupon codes in cat messages
+  if (type === 'cat') {
+    const coupons = extractAndSaveCoupons(text);
+    if (coupons.length > 0) {
+      // Replace coupon codes with styled spans
+      let html = text.replace(/[<>&]/g, c => ({ '<': '&lt;', '>': '&gt;', '&': '&amp;' }[c]));
+      coupons.forEach(code => {
+        html = html.replace(code, `<div class="coupon-card"><div class="coupon-label">🎁 쿠폰 당첨!</div><div class="coupon-code">${code}</div><div class="coupon-hint">카페에서 이 코드를 보여주세요</div></div>`);
+      });
+      bubble.innerHTML = html;
+    } else {
+      bubble.textContent = text;
+    }
+  } else {
+    bubble.textContent = text;
+  }
 
   messageDiv.appendChild(bubble);
   chatMessages.appendChild(messageDiv);
@@ -216,6 +261,19 @@ async function sendMessage() {
   isLoading = true;
   sendButton.disabled = true;
 
+  // Check if answering an active quiz
+  if (activeQuiz) {
+    removeTyping();
+    await handleQuizAnswer(message);
+    return;
+  }
+
+  // Check if requesting a quiz
+  if (/퀴즈|문제|퀴즈|도전/.test(message)) {
+    await handleQuizStart();
+    return;
+  }
+
   showTyping();
 
   try {
@@ -243,6 +301,55 @@ async function sendMessage() {
     console.error('Chat error:', error);
     showToast(error.message || '다시 시도해주세요!');
   } finally {
+    isLoading = false;
+    sendButton.disabled = false;
+    messageInput.focus();
+  }
+}
+
+/**
+ * Start a quiz
+ */
+async function handleQuizStart() {
+  try {
+    const res = await fetch('/api/quiz');
+    if (!res.ok) throw new Error('퀴즈가 없습니다');
+    const quiz = await res.json();
+    activeQuiz = quiz;
+
+    const cat = allCats.find(c => c.id === currentCatId);
+    const quizMsg = `${cat.emoji} 퀴즈타임이냥!\n\n❓ ${quiz.question}\n\n💡 힌트: ${quiz.hint}`;
+    addMessage(quizMsg, 'cat');
+  } catch (e) {
+    addMessage('지금은 퀴즈가 준비 안 됐냥... 나중에 다시 와냥! 😿', 'cat');
+  } finally {
+    isLoading = false;
+    sendButton.disabled = false;
+    messageInput.focus();
+  }
+}
+
+/**
+ * Handle quiz answer
+ */
+async function handleQuizAnswer(answer) {
+  try {
+    const res = await fetch('/api/quiz/answer', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ quizId: activeQuiz.id, answer }),
+    });
+    const result = await res.json();
+
+    if (result.correct) {
+      addMessage(`🎉 정답이냥!! 축하한다냥!\n\n🎁 쿠폰 코드: ${result.code}\n카페에서 이 코드를 보여주면 혜택을 받을 수 있냥!`, 'cat');
+    } else {
+      addMessage(`아쉽다냥... 😿 정답은 「${result.answer}」이었냥! 다음에 다시 도전하냥!`, 'cat');
+    }
+  } catch {
+    addMessage('오류가 났다냥... 다시 시도해냥! 😿', 'cat');
+  } finally {
+    activeQuiz = null;
     isLoading = false;
     sendButton.disabled = false;
     messageInput.focus();

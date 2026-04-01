@@ -1,0 +1,14 @@
+{
+  "name": "cat-chat",
+  "version": "0.1.0",
+  "description": "AI Cat Chat for Cafe Torcello",
+  "type": "module",
+  "scripts": {
+    "dev": "bun run server.js",
+    "start": "bun run server.js"
+  },
+  "dependencies": {},
+  "engines": {
+    "bun": ">=1.0.0"
+  }
+}

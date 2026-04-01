@@ -1,0 +1,346 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>관리자 - Cat Chat</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, sans-serif;
+      background: #f5f5f0;
+      color: #333;
+      padding: 20px;
+      max-width: 700px;
+      margin: 0 auto;
+    }
+    h1 { font-size: 20px; margin-bottom: 20px; }
+    h2 { font-size: 16px; margin: 20px 0 10px; color: #666; }
+
+    /* Login */
+    .login-box {
+      background: #fff;
+      padding: 30px;
+      border-radius: 12px;
+      text-align: center;
+      margin-top: 40px;
+    }
+    .login-box input {
+      padding: 10px 14px;
+      border: 1px solid #ddd;
+      border-radius: 8px;
+      font-size: 14px;
+      width: 200px;
+      margin: 10px;
+    }
+    .login-box button {
+      padding: 10px 20px;
+      background: #007aff;
+      color: #fff;
+      border: none;
+      border-radius: 8px;
+      font-size: 14px;
+      cursor: pointer;
+    }
+
+    /* Admin panel */
+    .admin-panel { display: none; }
+    .admin-panel.show { display: block; }
+
+    /* Cat card */
+    .cat-card {
+      background: #fff;
+      border: 1px solid #e0e0e0;
+      border-radius: 12px;
+      padding: 16px;
+      margin-bottom: 12px;
+    }
+    .cat-card-header {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      margin-bottom: 12px;
+    }
+    .cat-card-header .emoji { font-size: 28px; }
+    .cat-card-header .name { font-weight: 600; font-size: 16px; flex: 1; }
+    .cat-card-header .actions { display: flex; gap: 6px; }
+
+    /* Form */
+    .field { margin-bottom: 10px; }
+    .field label {
+      display: block;
+      font-size: 12px;
+      color: #666;
+      margin-bottom: 4px;
+    }
+    .field input, .field textarea {
+      width: 100%;
+      padding: 8px 12px;
+      border: 1px solid #ddd;
+      border-radius: 8px;
+      font-size: 14px;
+      font-family: inherit;
+    }
+    .field textarea { min-height: 60px; resize: vertical; }
+
+    /* Buttons */
+    .btn {
+      padding: 6px 14px;
+      border: none;
+      border-radius: 8px;
+      font-size: 13px;
+      cursor: pointer;
+      transition: background 0.2s;
+    }
+    .btn-primary { background: #007aff; color: #fff; }
+    .btn-primary:hover { background: #0051d5; }
+    .btn-danger { background: #ff3b30; color: #fff; }
+    .btn-danger:hover { background: #cc2f26; }
+    .btn-secondary { background: #f0f0f0; color: #333; }
+    .btn-secondary:hover { background: #e0e0e0; }
+    .btn-success { background: #34c759; color: #fff; }
+    .btn-success:hover { background: #2da44e; }
+
+    .add-btn {
+      width: 100%;
+      padding: 12px;
+      background: #fff;
+      border: 2px dashed #ccc;
+      border-radius: 12px;
+      font-size: 14px;
+      cursor: pointer;
+      color: #666;
+      margin-top: 8px;
+    }
+    .add-btn:hover { border-color: #999; color: #333; }
+
+    .msg { padding: 8px 12px; border-radius: 8px; font-size: 13px; margin: 8px 0; }
+    .msg-ok { background: #d4edda; color: #155724; }
+    .msg-err { background: #f8d7da; color: #721c24; }
+
+    .edit-form { display: none; }
+    .edit-form.show { display: block; }
+  </style>
+</head>
+<body>
+  <h1>🐱 Cat Chat 관리자</h1>
+
+  <!-- Login -->
+  <div class="login-box" id="loginBox">
+    <p>관리자 비밀번호를 입력하세요</p>
+    <input type="password" id="passwordInput" placeholder="비밀번호" />
+    <button onclick="login()">로그인</button>
+    <div id="loginMsg"></div>
+  </div>
+
+  <!-- Admin Panel -->
+  <div class="admin-panel" id="adminPanel">
+    <h2>고양이 목록</h2>
+    <div id="catCards"></div>
+    <button class="add-btn" onclick="showAddForm()">+ 새 고양이 추가</button>
+  </div>
+
+  <script>
+    const API = '';
+    let token = '';
+
+    // Check saved token
+    const saved = sessionStorage.getItem('catchat_admin_token');
+    if (saved) {
+      token = saved;
+      showAdmin();
+    }
+
+    async function login() {
+      const pw = document.getElementById('passwordInput').value;
+      // We'll verify by trying to fetch cats (any request works)
+      // The password is stored as Bearer token
+      token = pw;
+      sessionStorage.setItem('catchat_admin_token', token);
+      await loadCats();
+      showAdmin();
+    }
+
+    function showAdmin() {
+      document.getElementById('loginBox').style.display = 'none';
+      document.getElementById('adminPanel').classList.add('show');
+      loadCats();
+    }
+
+    function authHeaders() {
+      return {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${token}`,
+      };
+    }
+
+    async function loadCats() {
+      try {
+        const res = await fetch(`${API}/api/cats`);
+        const cats = await res.json();
+        renderCatCards(cats);
+      } catch (e) {
+        console.error('Failed to load cats:', e);
+      }
+    }
+
+    function renderCatCards(cats) {
+      const container = document.getElementById('catCards');
+      container.innerHTML = cats.map(cat => `
+        <div class="cat-card" id="card-${cat.id}">
+          <div class="cat-card-header">
+            <span class="emoji">${cat.emoji}</span>
+            <span class="name">${cat.name}</span>
+            <div class="actions">
+              <button class="btn btn-primary" onclick="toggleEdit('${cat.id}')">수정</button>
+              <button class="btn btn-danger" onclick="deleteCat('${cat.id}', '${cat.name}')">삭제</button>
+            </div>
+          </div>
+          <div class="field"><label>인사말</label><div style="font-size:13px;color:#666">${cat.greeting}</div></div>
+          <div class="edit-form" id="edit-${cat.id}">
+            <div class="field">
+              <label>이름</label>
+              <input id="name-${cat.id}" value="${cat.name}" />
+            </div>
+            <div class="field">
+              <label>이모지</label>
+              <input id="emoji-${cat.id}" value="${cat.emoji}" />
+            </div>
+            <div class="field">
+              <label>인사말</label>
+              <input id="greeting-${cat.id}" value="${cat.greeting}" />
+            </div>
+            <div class="field">
+              <label>성격 프롬프트 (systemPrompt)</label>
+              <textarea id="prompt-${cat.id}" rows="4"></textarea>
+            </div>
+            <div style="display:flex;gap:6px">
+              <button class="btn btn-success" onclick="saveCat('${cat.id}')">저장</button>
+              <button class="btn btn-secondary" onclick="toggleEdit('${cat.id}')">취소</button>
+            </div>
+            <div id="msg-${cat.id}"></div>
+          </div>
+        </div>
+      `).join('');
+
+      // Load full cat data for edit forms
+      cats.forEach(cat => loadFullCat(cat.id));
+    }
+
+    async function loadFullCat(catId) {
+      try {
+        const res = await fetch(`${API}/api/cats/${catId}`);
+        const cat = await res.json();
+        const el = document.getElementById(`prompt-${catId}`);
+        if (el && cat.systemPrompt) el.value = cat.systemPrompt;
+      } catch {}
+    }
+
+    function toggleEdit(catId) {
+      const form = document.getElementById(`edit-${catId}`);
+      form.classList.toggle('show');
+    }
+
+    async function saveCat(catId) {
+      const data = {
+        name: document.getElementById(`name-${catId}`).value,
+        emoji: document.getElementById(`emoji-${catId}`).value,
+        greeting: document.getElementById(`greeting-${catId}`).value,
+        systemPrompt: document.getElementById(`prompt-${catId}`).value,
+      };
+
+      try {
+        const res = await fetch(`${API}/api/admin/cats/${catId}`, {
+          method: 'PUT',
+          headers: authHeaders(),
+          body: JSON.stringify(data),
+        });
+        const result = await res.json();
+        if (res.ok) {
+          showMsg(catId, '저장 완료!', true);
+          loadCats();
+        } else {
+          showMsg(catId, result.error || '저장 실패', false);
+        }
+      } catch (e) {
+        showMsg(catId, '저장 실패: ' + e.message, false);
+      }
+    }
+
+    async function deleteCat(catId, name) {
+      if (!confirm(`${name}을(를) 삭제할까요?`)) return;
+      try {
+        const res = await fetch(`${API}/api/admin/cats/${catId}`, {
+          method: 'DELETE',
+          headers: authHeaders(),
+        });
+        if (res.ok) {
+          loadCats();
+        } else {
+          const result = await res.json();
+          alert(result.error || '삭제 실패');
+        }
+      } catch (e) {
+        alert('삭제 실패');
+      }
+    }
+
+    function showAddForm() {
+      const html = `
+        <div class="cat-card" id="add-form">
+          <div class="cat-card-header">
+            <span class="emoji">🐱</span>
+            <span class="name">새 고양이</span>
+            <button class="btn btn-secondary" onclick="document.getElementById('add-form').remove()">취소</button>
+          </div>
+          <div class="field"><label>이름</label><input id="add-name" /></div>
+          <div class="field"><label>이모지</label><input id="add-emoji" value="🐱" /></div>
+          <div class="field"><label>색상</label><input id="add-color" value="#FFB6C1" /></div>
+          <div class="field"><label>인사말</label><input id="add-greeting" /></div>
+          <div class="field"><label>성격 프롬프트</label><textarea id="add-prompt" rows="4"></textarea></div>
+          <button class="btn btn-success" onclick="addCat()">추가</button>
+          <div id="add-msg"></div>
+        </div>
+      `;
+      document.getElementById('catCards').insertAdjacentHTML('beforeend', html);
+    }
+
+    async function addCat() {
+      const data = {
+        name: document.getElementById('add-name').value,
+        emoji: document.getElementById('add-emoji').value,
+        color: document.getElementById('add-color').value,
+        greeting: document.getElementById('add-greeting').value,
+        systemPrompt: document.getElementById('add-prompt').value,
+      };
+
+      if (!data.name || !data.systemPrompt) {
+        document.getElementById('add-msg').innerHTML = '<div class="msg msg-err">이름과 프롬프트는 필수입니다</div>';
+        return;
+      }
+
+      try {
+        const res = await fetch(`${API}/api/admin/cats`, {
+          method: 'POST',
+          headers: authHeaders(),
+          body: JSON.stringify(data),
+        });
+        const result = await res.json();
+        if (res.ok) {
+          loadCats();
+        } else {
+          document.getElementById('add-msg').innerHTML = `<div class="msg msg-err">${result.error}</div>`;
+        }
+      } catch (e) {
+        document.getElementById('add-msg').innerHTML = `<div class="msg msg-err">추가 실패</div>`;
+      }
+    }
+
+    function showMsg(catId, text, ok) {
+      const el = document.getElementById(`msg-${catId}`);
+      el.innerHTML = `<div class="msg ${ok ? 'msg-ok' : 'msg-err'}">${text}</div>`;
+      setTimeout(() => el.innerHTML = '', 2000);
+    }
+  </script>
+</body>
+</html>
